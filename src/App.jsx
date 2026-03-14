@@ -1,10 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-const USERS = [
-  { id:1, name:"Lena Hoffmann", email:"lena@beratung.de", password:"Lena2024", role:"employee", avatar:"LH" },
-  { id:2, name:"Tom Fischer", email:"tom@beratung.de", password:"Tom2024", role:"employee", avatar:"TF" },
-  { id:3, name:"Jana Braun", email:"jana@beratung.de", password:"Jana2024", role:"employee", avatar:"JB" },
-  { id:4, name:"Admin", email:"admin@beratung.de", password:"Admin2024", role:"admin", avatar:"AD" },
-];
+import { supabase } from './lib/supabase.js';
 
 // ═══════════════════════════════════════════════════════════════════
 // KAPITEL & LEKTIONEN — vollständig, 7 Kapitel, 23 Lektionen
@@ -796,7 +791,15 @@ const LESSON_CASES = {
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════
 const totalLessons = CHAPTERS.reduce((s, c) => s + c.lessons.length, 0);
-const isLessonComplete = (prog, lid) => !!prog?.[lid]?.completed;
+const QUIZ_PASS = 75; // Mindest-Score Quiz
+const isLessonComplete = (prog, lid) => {
+  const p = prog?.[lid];
+  if (!p) return false;
+  const quizOk = p.quizScore !== undefined ? p.quizScore >= QUIZ_PASS : false;
+  const hasAssessment = typeof LESSON_CASES !== "undefined" && !!LESSON_CASES[lid];
+  const assessOk = hasAssessment ? !!p.assessmentPassed : true;
+  return quizOk && assessOk;
+};
 const chapterProgress = (prog, ch) => {
   const done = ch.lessons.filter(l => isLessonComplete(prog, l.id)).length;
   return { done, total: ch.lessons.length, pct: Math.round(done / ch.lessons.length * 100) };
@@ -928,11 +931,33 @@ function ContentBlocks({ blocks }) {
 // LOGIN
 // ═══════════════════════════════════════════════════════════════════
 function LoginScreen({ onLogin }) {
-  const [email, setEmail] = useState(""); const [pw, setPw] = useState(""); const [err, setErr] = useState(false); const [loading, setLoading] = useState(false);
-  const handleLogin = () => {
-    const u = USERS.find(u => u.email===email && u.password===pw);
-    if (u) { setLoading(true); setTimeout(()=>onLogin(u), 350); } else setErr(true);
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [resetMode, setResetMode] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
+
+  const handleLogin = async () => {
+    if (!email.trim() || !pw.trim()) { setErr("Bitte E-Mail und Passwort eingeben."); return; }
+    setLoading(true); setErr("");
+    const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pw });
+    if (error) { setErr("E-Mail oder Passwort nicht korrekt."); setLoading(false); return; }
+    // Profile is loaded by App via onAuthStateChange
+    onLogin(data.user);
   };
+
+  const handleReset = async () => {
+    if (!email.trim()) { setErr("Bitte zuerst E-Mail eingeben."); return; }
+    setLoading(true); setErr("");
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: window.location.href
+    });
+    setLoading(false);
+    if (error) { setErr("Fehler beim Senden. Bitte erneut versuchen."); return; }
+    setResetSent(true);
+  };
+
   return (
     <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'DM Sans',sans-serif", backgroundImage:"radial-gradient(ellipse at 60% 0%, rgba(192,112,58,0.06) 0%, transparent 60%)" }}>
       <div className="fade-up" style={{ width:400 }}>
@@ -942,16 +967,45 @@ function LoginScreen({ onLogin }) {
           <div style={{ fontSize:13, color:T.text3, marginTop:4 }}>Professionelle Beratungskompetenz</div>
         </div>
         <div style={{ background:T.surface, borderRadius:20, boxShadow:T.shadowLg, padding:"32px 36px", border:`1px solid ${T.border}` }}>
-          {["E-Mail","Passwort"].map((label, i) => (
-            <div key={label} style={{ marginBottom: i===0?18:24 }}>
-              <label style={{ display:"block", fontSize:12, fontWeight:500, color:T.text2, marginBottom:7 }}>{label}</label>
-              <input type={i===1?"password":"email"} value={i===0?email:pw} onChange={e=>{ i===0?setEmail(e.target.value):setPw(e.target.value); setErr(false); }} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder={i===0?"dein.name@beratung.de":""} style={{ width:"100%", padding:"10px 14px", border:`1.5px solid ${err?T.red:T.border}`, borderRadius:T.rSm, fontSize:14, color:T.text, background:T.surface, transition:"border-color 0.15s" }} />
+          {resetSent ? (
+            <div>
+              <div style={{ background:T.greenLt, border:`1px solid ${T.greenBdr}`, borderRadius:T.rSm, padding:"14px 16px", fontSize:13.5, color:T.green, marginBottom:20, lineHeight:1.65 }}>
+                ✓ Passwort-Reset-Link wurde an <strong>{email}</strong> gesendet. Bitte E-Mail prüfen.
+              </div>
+              <Btn variant="ghost" style={{ width:"100%" }} onClick={()=>{ setResetSent(false); setResetMode(false); }}>Zurück zum Login</Btn>
             </div>
-          ))}
-          {err && <div style={{ background:T.redLt, border:`1px solid ${T.redBdr}`, borderRadius:T.rXs, padding:"10px 14px", fontSize:13, color:T.red, marginBottom:18 }}>E-Mail oder Passwort nicht korrekt.</div>}
-          <button onClick={handleLogin} style={{ width:"100%", background:T.rail, color:"#fff", border:"none", borderRadius:T.rSm, padding:"12px", fontWeight:500, fontSize:15, fontFamily:"inherit", opacity:loading?0.7:1 }} onMouseEnter={e=>e.currentTarget.style.background="#2C2C2E"} onMouseLeave={e=>e.currentTarget.style.background=T.rail}>{loading?"Wird angemeldet…":"Anmelden"}</button>
-          <Divider my={20} />
-          <div style={{ fontSize:12, color:T.text3, lineHeight:1.7 }}><span style={{ fontWeight:500, color:T.text2 }}>Demo: </span>lena@beratung.de / Lena2024 · admin@beratung.de / Admin2024</div>
+          ) : (
+            <>
+              <div style={{ marginBottom:18 }}>
+                <label style={{ display:"block", fontSize:12, fontWeight:500, color:T.text2, marginBottom:7 }}>E-Mail</label>
+                <input type="email" value={email} onChange={e=>{ setEmail(e.target.value); setErr(""); }}
+                  onKeyDown={e=>e.key==="Enter"&&(resetMode?handleReset():handleLogin())}
+                  placeholder="dein.name@beratung.de"
+                  style={{ width:"100%", padding:"10px 14px", border:`1.5px solid ${err?T.red:T.border}`, borderRadius:T.rSm, fontSize:14, color:T.text, background:T.surface, transition:"border-color 0.15s" }} />
+              </div>
+              {!resetMode && (
+                <div style={{ marginBottom:20 }}>
+                  <label style={{ display:"block", fontSize:12, fontWeight:500, color:T.text2, marginBottom:7 }}>Passwort</label>
+                  <input type="password" value={pw} onChange={e=>{ setPw(e.target.value); setErr(""); }}
+                    onKeyDown={e=>e.key==="Enter"&&handleLogin()}
+                    style={{ width:"100%", padding:"10px 14px", border:`1.5px solid ${err?T.red:T.border}`, borderRadius:T.rSm, fontSize:14, color:T.text, background:T.surface }} />
+                </div>
+              )}
+              {err && <div style={{ background:T.redLt, border:`1px solid ${T.redBdr}`, borderRadius:T.rXs, padding:"10px 14px", fontSize:13, color:T.red, marginBottom:16 }}>{err}</div>}
+              <button onClick={resetMode?handleReset:handleLogin}
+                style={{ width:"100%", background:T.rail, color:"#fff", border:"none", borderRadius:T.rSm, padding:"12px", fontWeight:500, fontSize:15, fontFamily:"inherit", opacity:loading?0.7:1, cursor:"pointer" }}
+                onMouseEnter={e=>e.currentTarget.style.background="#2C2C2E"}
+                onMouseLeave={e=>e.currentTarget.style.background=T.rail}>
+                {loading ? "Bitte warten…" : resetMode ? "Reset-Link senden" : "Anmelden"}
+              </button>
+              <div style={{ textAlign:"center", marginTop:16 }}>
+                <button onClick={()=>{ setResetMode(!resetMode); setErr(""); }}
+                  style={{ background:"none", border:"none", fontSize:12.5, color:T.text3, cursor:"pointer", textDecoration:"underline" }}>
+                  {resetMode ? "Zurück zum Login" : "Passwort vergessen?"}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -1112,7 +1166,7 @@ function Dashboard({ user, prog, onSelectChapter, onExtras, onCertificate, onCer
 // ═══════════════════════════════════════════════════════════════════
 // CHAPTER VIEW — mit Fallstudie-Einstieg
 // ═══════════════════════════════════════════════════════════════════
-function ChapterView({ chapter, prog, onSelectLesson, onBack }) {
+function ChapterView({ chapter, prog, isAdmin, onSelectLesson, onBack }) {
   const cp = chapterProgress(prog, chapter);
 
   return (
@@ -1136,7 +1190,7 @@ function ChapterView({ chapter, prog, onSelectLesson, onBack }) {
       <div style={{ display:"flex", flexDirection:"column", gap:10, marginBottom:24 }}>
         {chapter.lessons.map((lesson, idx) => {
           const done = isLessonComplete(prog, lesson.id);
-          const unlocked = isLessonUnlocked(lesson.id, prog);
+          const unlocked = isAdmin || isLessonUnlocked(lesson.id, prog);
           return (
             <div key={lesson.id} onClick={()=>unlocked&&onSelectLesson(lesson,chapter)}
               style={{ background:T.surface, border:`1px solid ${done?T.greenBdr:T.border}`, borderRadius:T.r, padding:"18px 22px", cursor:unlocked?"pointer":"default", display:"flex", alignItems:"center", gap:16, opacity:unlocked?1:0.55, transition:"box-shadow 0.2s, transform 0.18s", boxShadow:T.shadow }}
@@ -1147,7 +1201,19 @@ function ChapterView({ chapter, prog, onSelectLesson, onBack }) {
               </div>
               <div style={{ flex:1 }}>
                 <div style={{ fontWeight:500, fontSize:14, color:T.text, marginBottom:3 }}>{lesson.title}</div>
-                <div style={{ fontSize:12, color:T.text3 }}>{unlocked?`${lesson.duration} · ${lesson.quiz.length} Quizfragen`:`Schließe zuerst Lektion ${idx} ab`}</div>
+                <div style={{ fontSize:12, color:T.text3 }}>
+                  {!unlocked && `Schließe zuerst Lektion ${idx} ab`}
+                  {unlocked && !done && (() => {
+                    const lp = prog?.[lesson.id] || {};
+                    const qDone = lp.quizScore !== undefined && lp.quizScore >= QUIZ_PASS;
+                    const aDone = !!lp.assessmentPassed;
+                    const hasA = !!LESSON_CASES[lesson.id];
+                    if (!qDone) return `${lesson.duration} · Quiz ausstehend`;
+                    if (hasA && !aDone) return `Quiz ✓ · Praxisüberprüfung ausstehend`;
+                    return `${lesson.duration} · ${lesson.quiz.length} Quizfragen`;
+                  })()}
+                  {unlocked && done && `${lesson.duration} · Abgeschlossen`}
+                </div>
               </div>
               {done && <Tag variant="green">✓</Tag>}
               {unlocked && !done && <span style={{ color:T.text3, fontSize:16 }}>›</span>}
@@ -1160,30 +1226,85 @@ function ChapterView({ chapter, prog, onSelectLesson, onBack }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// LESSON VIEW
+// LESSON VIEW — Quiz integriert, Checkliste interaktiv, Auto-Completion
 // ═══════════════════════════════════════════════════════════════════
-function LessonView({ lesson, chapter, prog, onComplete, onBack }) {
-  const done = isLessonComplete(prog, lesson.id);
-  useEffect(()=>{ }, [lesson.id]);
+function LessonView({ lesson, chapter, prog, isAdmin, onComplete, onBack, onNextLesson, nextLessonTitle }) {
+  const lp = prog?.[lesson.id] || {};
+  const quizAlreadyPassed = isAdmin || (lp.quizScore !== undefined && lp.quizScore >= QUIZ_PASS);
+  const assessAlreadyPassed = isAdmin || !!lp.assessmentPassed;
+  const lessonDone = isLessonComplete(prog, lesson.id);
+  const hasAssessment = !!LESSON_CASES[lesson.id];
+
+  // Interactive checklist state (local, resets on navigation — intentional)
+  const [checked, setChecked] = useState({});
+
+  // Quiz state
+  const [answers, setAnswers] = useState({});
+  const [quizSubmitted, setQuizSubmitted] = useState(quizAlreadyPassed);
+  const [quizScore, setQuizScore] = useState(lp.quizScore ?? null);
+  const [quizPassed, setQuizPassed] = useState(quizAlreadyPassed);
+
+  useEffect(() => {
+    setChecked({});
+    const lp2 = prog?.[lesson.id] || {};
+    const qp = lp2.quizScore !== undefined && lp2.quizScore >= QUIZ_PASS;
+    setQuizSubmitted(qp); setQuizPassed(qp);
+    setQuizScore(lp2.quizScore ?? null); setAnswers({});
+  }, [lesson.id]);
+
+  // Find lesson index within chapter for position indicator
+  const lessonIdx = chapter.lessons.findIndex(l => l.id === lesson.id);
+  const lessonNum = lessonIdx + 1;
+
+  const handleQuizSubmit = () => {
+    const score = lesson.quiz.filter((q, i) => answers[i] === q.a).length;
+    const pct = Math.round(score / lesson.quiz.length * 100);
+    const passed = pct >= QUIZ_PASS;
+    setQuizScore(pct); setQuizSubmitted(true); setQuizPassed(passed);
+    onComplete(lesson.id, { quizScore: pct });
+  };
+
+  const handleQuizRetry = () => {
+    setAnswers({}); setQuizSubmitted(false); setQuizScore(null); setQuizPassed(false);
+  };
 
   return (
     <div style={{ padding:"40px 44px", maxWidth:860, fontFamily:"'DM Sans',sans-serif" }} className="fade-up">
-      <button onClick={onBack} style={{ background:"none", border:"none", color:T.text3, fontSize:13, marginBottom:24, display:"flex", alignItems:"center", gap:6, padding:0, transition:"color 0.15s" }} onMouseEnter={e=>e.currentTarget.style.color=T.text} onMouseLeave={e=>e.currentTarget.style.color=T.text3}>← {chapter.title}</button>
+      {/* Back + position */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:24 }}>
+        <button onClick={onBack} style={{ background:"none", border:"none", color:T.text3, fontSize:13, display:"flex", alignItems:"center", gap:6, padding:0, cursor:"pointer", transition:"color 0.15s" }}
+          onMouseEnter={e=>e.currentTarget.style.color=T.text} onMouseLeave={e=>e.currentTarget.style.color=T.text3}>
+          ← {chapter.title}
+        </button>
+        <span style={{ fontSize:12, color:T.text3, fontWeight:500 }}>
+          Lektion {lessonNum} von {chapter.lessons.length} · Kapitel {chapter.number}
+        </span>
+      </div>
+
+      {/* Lesson header */}
       <div style={{ marginBottom:28 }}>
         <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap", alignItems:"center" }}>
-          <Tag>Kap. {chapter.number}</Tag><Tag>{lesson.duration}</Tag>
-          {done && <Tag variant="green">✓ Abgeschlossen</Tag>}
+          <Tag>Kap. {chapter.number}</Tag>
+          <Tag>{lesson.duration}</Tag>
+          {lessonDone && <Tag variant="green">✓ Abgeschlossen</Tag>}
         </div>
-        <h1 style={{ fontFamily:"'Cormorant',serif", fontSize:28, fontWeight:400, color:T.text, letterSpacing:"-0.02em", marginBottom:12, lineHeight:1.2 }}>{lesson.title}</h1>
-        <div style={{ background:T.blueLt, border:`1px solid rgba(0,102,204,0.15)`, borderRadius:T.rSm, padding:"12px 16px", fontSize:13.5, color:T.blue, lineHeight:1.65 }}><strong style={{ fontWeight:600 }}>Lernziel:</strong> {lesson.objective}</div>
+        <h1 style={{ fontFamily:"'Cormorant',serif", fontSize:28, fontWeight:400, color:T.text, letterSpacing:"-0.02em", marginBottom:12, lineHeight:1.2 }}>
+          {lesson.title}
+        </h1>
+        <div style={{ background:T.blueLt, border:`1px solid rgba(0,102,204,0.15)`, borderRadius:T.rSm, padding:"12px 16px", fontSize:13.5, color:T.blue, lineHeight:1.65 }}>
+          <strong style={{ fontWeight:600 }}>Lernziel:</strong> {lesson.objective}
+        </div>
       </div>
 
       {/* Video */}
       {lesson.videoUrl ? (
         <div style={{ borderRadius:T.r, overflow:"hidden", marginBottom:28, background:"#000", aspectRatio:"16/9", boxShadow:T.shadowMd }}>
-          {lesson.videoUrl.includes("vimeo")?(<iframe src={`https://player.vimeo.com/video/${lesson.videoUrl.split("/").pop()}?title=0&byline=0&portrait=0`} style={{width:"100%",height:"100%",border:"none"}} allowFullScreen/>):(<iframe src={`https://www.youtube.com/embed/${lesson.videoUrl.includes("youtu.be")?lesson.videoUrl.split("/").pop():new URLSearchParams(lesson.videoUrl.split("?")[1]).get("v")}`} style={{width:"100%",height:"100%",border:"none"}} allowFullScreen/>)}
+          {lesson.videoUrl.includes("vimeo")
+            ? <iframe src={`https://player.vimeo.com/video/${lesson.videoUrl.split("/").pop()}?title=0&byline=0&portrait=0`} style={{width:"100%",height:"100%",border:"none"}} allowFullScreen/>
+            : <iframe src={`https://www.youtube.com/embed/${lesson.videoUrl.includes("youtu.be")?lesson.videoUrl.split("/").pop():new URLSearchParams(lesson.videoUrl.split("?")[1]).get("v")}`} style={{width:"100%",height:"100%",border:"none"}} allowFullScreen/>
+          }
         </div>
-      ):(
+      ) : (
         <div style={{ background:T.rail, borderRadius:T.r, aspectRatio:"16/6", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", marginBottom:28, gap:10, border:`1px solid rgba(255,255,255,0.07)`, boxShadow:T.shadowMd }}>
           <div style={{ fontSize:24, opacity:0.3 }}>▶</div>
           <div style={{ fontSize:13, fontWeight:500, color:"rgba(255,255,255,0.6)" }}>Video folgt: {lesson.title}</div>
@@ -1191,39 +1312,163 @@ function LessonView({ lesson, chapter, prog, onComplete, onBack }) {
         </div>
       )}
 
-      <div style={{ background:T.surface, borderRadius:T.r, padding:"28px 32px", border:`1px solid ${T.border}`, marginBottom:20, boxShadow:T.shadow }}><ContentBlocks blocks={lesson.content} /></div>
+      {/* Content */}
+      <div style={{ background:T.surface, borderRadius:T.r, padding:"28px 32px", border:`1px solid ${T.border}`, marginBottom:20, boxShadow:T.shadow }}>
+        <ContentBlocks blocks={lesson.content} />
+      </div>
 
-      <div style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:T.r, padding:"22px 24px", marginBottom:20, boxShadow:T.shadow }}>
-        <div style={{ fontWeight:500, fontSize:14, color:T.text, marginBottom:14 }}>🎯 Checkliste: Das solltest du können</div>
-        {lesson.checkCriteria.map((c,i)=>(
-          <div key={i} style={{ display:"flex", gap:10, alignItems:"flex-start", marginBottom:i<lesson.checkCriteria.length-1?10:0 }}>
-            <div style={{ width:17, height:17, borderRadius:4, border:`1.5px solid ${T.border}`, flexShrink:0, marginTop:2, background:T.surface }} />
-            <span style={{ fontSize:13.5, color:T.text2, lineHeight:1.55 }}>{c}</span>
+      {/* Interactive Checkliste */}
+      <div style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:T.r, padding:"22px 24px", marginBottom:28, boxShadow:T.shadow }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
+          <div style={{ fontWeight:500, fontSize:14, color:T.text }}>🎯 Lernziel-Checkliste</div>
+          <span style={{ fontSize:12, color:T.text3 }}>
+            {Object.values(checked).filter(Boolean).length}/{lesson.checkCriteria.length} abgehakt
+          </span>
+        </div>
+        {lesson.checkCriteria.map((c, i) => {
+          const isChecked = !!checked[i];
+          return (
+            <div key={i} onClick={() => setChecked(prev => ({ ...prev, [i]: !prev[i] }))}
+              style={{ display:"flex", gap:12, alignItems:"flex-start", marginBottom: i < lesson.checkCriteria.length-1 ? 10 : 0, cursor:"pointer", userSelect:"none" }}>
+              <div style={{
+                width:18, height:18, borderRadius:5, border:`1.5px solid ${isChecked ? T.green : T.border}`,
+                flexShrink:0, marginTop:2, background: isChecked ? T.green : T.surface,
+                display:"flex", alignItems:"center", justifyContent:"center",
+                transition:"all 0.15s", fontSize:11, color:"#fff", fontWeight:700
+              }}>
+                {isChecked && "✓"}
+              </div>
+              <span style={{ fontSize:13.5, color: isChecked ? T.text : T.text2, lineHeight:1.55, transition:"color 0.15s", textDecoration: isChecked ? "none" : "none" }}>
+                {c}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ─── STEP 1: QUIZ ─────────────────────────────────────────── */}
+      <div style={{ borderRadius:T.r, border:`1px solid ${quizPassed ? T.greenBdr : T.border}`, overflow:"hidden", marginBottom:20, boxShadow:T.shadow }}>
+        <div style={{ background: quizPassed ? T.green : T.rail, padding:"14px 24px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            <span style={{ fontSize:13, opacity:0.7 }}>🧩</span>
+            <span style={{ fontSize:12, fontWeight:500, color:"rgba(255,255,255,0.85)", letterSpacing:"0.04em", textTransform:"uppercase" }}>
+              Schritt 1 · Wissenstest
+            </span>
+            <span style={{ fontSize:11, color:"rgba(255,255,255,0.4)" }}>· {lesson.quiz.length} Fragen · Mindest-Score {QUIZ_PASS}%</span>
           </div>
-        ))}
-      </div>
-
-      <div style={{ background:T.accentLt, border:`1px solid ${T.accentBdr}`, borderRadius:T.rSm, padding:"13px 18px", marginBottom:24, display:"flex", alignItems:"center", gap:12 }}>
-        <span style={{ fontSize:16 }}>📄</span>
-        <span style={{ fontSize:13, color:T.text2 }}><strong style={{ color:T.accent, fontWeight:500 }}>Übungsblatt:</strong> {lesson.pdfLabel}</span>
-      </div>
-
-      {/* Wissensüberprüfung */}
-      <div style={{ borderRadius:T.r, border:`1px solid ${T.border}`, overflow:"hidden", marginBottom:28, boxShadow:T.shadow }}>
-        {/* Section header */}
-        <div style={{ background:T.rail, padding:"14px 24px", display:"flex", alignItems:"center", gap:10 }}>
-          <span style={{ fontSize:14, opacity:0.7 }}>🔍</span>
-          <span style={{ fontSize:12, fontWeight:500, color:"rgba(255,255,255,0.7)", letterSpacing:"0.04em", textTransform:"uppercase" }}>Wissensüberprüfung</span>
-          <span style={{ fontSize:11, color:"rgba(255,255,255,0.35)", marginLeft:4 }}>· Fallstudie · Formular · KI-Bewertung</span>
+          {quizPassed && <Tag variant="green">✓ Bestanden {quizScore}%</Tag>}
         </div>
         <div style={{ background:T.surface, padding:"24px 28px" }}>
-          {LESSON_CASES[lesson.id]
-            ? <LessonAssessment lesson={lesson} prog={prog} onComplete={onComplete} />
-            : <div style={{ fontSize:13.5, color:T.text3, padding:"8px 0" }}>Wissensüberprüfung folgt für diese Lektion.</div>
-          }
+          {!quizPassed ? (
+            <>
+              {lesson.quiz.map((q, qi) => (
+                <div key={qi} style={{ marginBottom:22 }}>
+                  <div style={{ fontWeight:500, fontSize:14, color:T.text, marginBottom:10, lineHeight:1.5 }}>
+                    <span style={{ color:T.text3, marginRight:8 }}>{qi+1}.</span>{q.q}
+                  </div>
+                  <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
+                    {q.opts.map((opt, oi) => {
+                      let bg=T.bg, border=T.border, color=T.text2, fw=400;
+                      if (quizSubmitted) {
+                        if (oi===q.a) { bg=T.greenLt; border=T.green; color=T.green; fw=500; }
+                        else if (answers[qi]===oi) { bg=T.redLt; border=T.red; color=T.red; }
+                      } else if (answers[qi]===oi) { bg=T.accentLt; border=T.accent; color=T.accent; fw=500; }
+                      return (
+                        <div key={oi} onClick={() => !quizSubmitted && setAnswers(a => ({...a,[qi]:oi}))}
+                          style={{ padding:"10px 15px", borderRadius:T.rSm, border:`1.5px solid ${border}`, background:bg, cursor:quizSubmitted?"default":"pointer", fontSize:13.5, color, fontWeight:fw, transition:"all 0.12s", display:"flex", alignItems:"center", gap:10 }}
+                          onMouseEnter={e => { if(!quizSubmitted && answers[qi]!==oi) e.currentTarget.style.borderColor=T.text3; }}
+                          onMouseLeave={e => { if(!quizSubmitted && answers[qi]!==oi) e.currentTarget.style.borderColor=T.border; }}>
+                          <span style={{ fontWeight:600, fontSize:12, width:18, color:color===T.text2?T.text3:color }}>{["A","B","C","D"][oi]}</span>
+                          <span style={{ flex:1 }}>{opt}</span>
+                          {quizSubmitted && oi===q.a && <span>✓</span>}
+                          {quizSubmitted && answers[qi]===oi && oi!==q.a && <span>✗</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              {!quizSubmitted ? (
+                <div style={{ display:"flex", alignItems:"center", gap:14, flexWrap:"wrap" }}>
+                  <Btn variant="primary" size="md"
+                    disabled={Object.keys(answers).length < lesson.quiz.length}
+                    onClick={handleQuizSubmit}>
+                    Auswertung abrufen →
+                  </Btn>
+                  {Object.keys(answers).length < lesson.quiz.length && (
+                    <span style={{ fontSize:12.5, color:T.text3 }}>
+                      {Object.keys(answers).length}/{lesson.quiz.length} Fragen beantwortet
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div style={{ background:T.redLt, border:`1px solid ${T.redBdr}`, borderRadius:T.rSm, padding:"16px 20px", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12 }}>
+                  <div>
+                    <div style={{ fontWeight:600, fontSize:14, color:T.red, marginBottom:3 }}>
+                      {quizScore}% — Mindest-Score {QUIZ_PASS}% nicht erreicht
+                    </div>
+                    <div style={{ fontSize:13, color:T.text2 }}>
+                      {lesson.quiz.filter((q,i) => answers[i]===q.a).length}/{lesson.quiz.length} Fragen richtig · Lies den Inhalt nochmals durch
+                    </div>
+                  </div>
+                  <Btn variant="ghostAccent" size="sm" onClick={handleQuizRetry}>↺ Nochmals versuchen</Btn>
+                </div>
+              )}
+            </>
+          ) : (
+            <div>
+              <div style={{ display:"flex", alignItems:"center", gap:12, padding:"4px 0", marginBottom:16 }}>
+                <span style={{ fontSize:18 }}>✅</span>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontWeight:500, fontSize:14, color:T.green }}>Wissenstest bestanden mit {quizScore}%</div>
+                  <div style={{ fontSize:12.5, color:T.text3, marginTop:2 }}>
+                    {hasAssessment ? "Weiter zur Praxisüberprüfung (Schritt 2)." : "Lektion abgeschlossen."}
+                  </div>
+                </div>
+              </div>
+              {hasAssessment && (
+                <Btn variant="accent" size="md" onClick={() => {
+                  const el = document.getElementById("step2-assessment");
+                  if (el) el.scrollIntoView({ behavior:"smooth", block:"start" });
+                }}>
+                  Weiter zu Schritt 2 ↓
+                </Btn>
+              )}
+              {!hasAssessment && nextLessonTitle && (
+                <Btn variant="green" size="md" onClick={onNextLesson}>
+                  Weiter → {nextLessonTitle.slice(0,30)}{nextLessonTitle.length>30?"…":""}
+                </Btn>
+              )}
+              {!hasAssessment && !nextLessonTitle && (
+                <Btn variant="green" size="md" onClick={onBack}>Zur Kapitelübersicht</Btn>
+              )}
+            </div>
+          )}
         </div>
       </div>
-      {!done && <Btn variant="green" size="lg" onClick={()=>onComplete(lesson.id,{completed:true,completedAt:new Date().toISOString()})}>✓ Lektion abschließen</Btn>}
+
+      {/* ─── STEP 2: WISSENSÜBERPRÜFUNG (nur wenn Quiz bestanden) ─── */}
+      {hasAssessment && (
+        <div id="step2-assessment" style={{ borderRadius:T.r, border:`1px solid ${assessAlreadyPassed ? T.greenBdr : quizPassed ? T.border : T.border}`, overflow:"hidden", marginBottom:28, boxShadow: quizPassed ? T.shadow : "none", opacity: quizPassed ? 1 : 0.45 }}>
+          <div style={{ background: assessAlreadyPassed ? T.green : quizPassed ? T.rail : "#2C2C2E", padding:"14px 24px", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              <span style={{ fontSize:13, opacity:0.7 }}>🔍</span>
+              <span style={{ fontSize:12, fontWeight:500, color:"rgba(255,255,255,0.85)", letterSpacing:"0.04em", textTransform:"uppercase" }}>
+                Schritt 2 · Praxisüberprüfung
+              </span>
+              <span style={{ fontSize:11, color:"rgba(255,255,255,0.4)" }}>· Fallstudie · Formular · KI-Bewertung</span>
+            </div>
+            {assessAlreadyPassed && <Tag variant="green">✓ Bestanden</Tag>}
+            {!quizPassed && <span style={{ fontSize:11, color:"rgba(255,255,255,0.3)" }}>🔒 erst nach Schritt 1</span>}
+          </div>
+          <div style={{ background:T.surface, padding:"24px 28px" }}>
+            {quizPassed
+              ? <LessonAssessment lesson={lesson} prog={prog} isAdmin={isAdmin} onComplete={onComplete} onNextLesson={onNextLesson} nextLessonTitle={nextLessonTitle} />
+              : <p style={{ fontSize:13.5, color:T.text3, padding:"4px 0" }}>Schließe zuerst den Wissenstest (Schritt 1) ab.</p>
+            }
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1231,10 +1476,9 @@ function LessonView({ lesson, chapter, prog, onComplete, onBack }) {
 // ═══════════════════════════════════════════════════════════════════
 // LESSON ASSESSMENT — Fallstudie · Download · Upload · KI-Bewertung
 // ═══════════════════════════════════════════════════════════════════
-function LessonAssessment({ lesson, prog, onComplete }) {
+function LessonAssessment({ lesson, prog, isAdmin, onComplete, onNextLesson, nextLessonTitle }) {
   const lc = LESSON_CASES[lesson.id];
-  // Passed state comes from prog — persistent across sessions
-  const alreadyPassed = !!prog?.[lesson.id]?.assessmentPassed;
+  const alreadyPassed = isAdmin || !!prog?.[lesson.id]?.assessmentPassed;
   const [freeText, setFreeText] = useState("");
   const [uploadedFile, setUploadedFile] = useState(null);
   const [uploadedText, setUploadedText] = useState("");
@@ -1243,11 +1487,10 @@ function LessonAssessment({ lesson, prog, onComplete }) {
   const [passed, setPassed] = useState(alreadyPassed);
   const fileRef = useRef(null);
 
-  // Reset only input fields when lesson changes — never reset passed if already done
   useEffect(() => {
     setFreeText(""); setUploadedFile(null); setUploadedText("");
     setFeedback(""); setLoading(false);
-    setPassed(!!prog?.[lesson.id]?.assessmentPassed);
+    setPassed(isAdmin || !!prog?.[lesson.id]?.assessmentPassed);
   }, [lesson.id]);
 
   const hasInput = freeText.trim().length > 0 || uploadedText.trim().length > 0;
@@ -1256,7 +1499,7 @@ function LessonAssessment({ lesson, prog, onComplete }) {
     const file = e.target.files[0];
     if (!file) return;
     setUploadedFile(file);
-    setPassed(null); setFeedback("");
+    setPassed(false); setFeedback("");
     if (file.type !== "application/pdf") {
       const reader = new FileReader();
       reader.onload = ev => setUploadedText(ev.target.result);
@@ -1269,13 +1512,13 @@ function LessonAssessment({ lesson, prog, onComplete }) {
   const handleSubmit = async () => {
     const content = uploadedText.trim() || freeText.trim();
     if (!content || loading) return;
-    setLoading(true); setFeedback(""); setPassed(null);
+    setLoading(true); setFeedback(""); setPassed(false);
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514", max_tokens: 1000,
-          system: `Du bist ein Elterngeld-Trainer und bewertest die Praxisantwort eines Lernenden.
+          model:"claude-sonnet-4-20250514", max_tokens:1000,
+          system:`Du bist ein Elterngeld-Trainer und bewertest die Praxisantwort eines Lernenden.
 
 Lektion: "${lesson.title}"
 Szenario: ${lc.scenario}
@@ -1284,15 +1527,15 @@ Aufgabe: ${lc.task}
 MUSTERLÖSUNG (nur für dich sichtbar):
 ${lc.solution}
 
-Bewertung nach diesem Schema – keine anderen Abschnitte, kein Einleitungstext:
+Bewertung – streng nach diesem Schema, keine Einleitung, kein Fülltext:
 ERGEBNIS: Bestanden oder Nicht bestanden (mind. 80% der Musterlösungspunkte korrekt)
 PUNKTE: X von ${lesson.checkCriteria.length} Kriterien erfüllt
-STÄRKEN: 1–2 konkret benannte Stärken
-LÜCKEN: Fehlende oder falsche Punkte mit kurzem Hinweis zur korrekten Lösung
+STÄRKEN: 1–2 konkrete Stärken der Antwort
+LÜCKEN: Fehlende oder falsche Punkte mit kurzem Korrekturhinweis
 PRAXIS-TIPP: 1 konkreter Hinweis für den Beratungsalltag
 
-Deutsch. Konstruktiv. Max. 220 Wörter.`,
-          messages: [{ role: "user", content: `Meine Lösung:\n\n${content}` }]
+Deutsch. Konstruktiv und präzise. Max. 220 Wörter.`,
+          messages:[{ role:"user", content:`Meine Lösung:\n\n${content}` }]
         })
       });
       const data = await res.json();
@@ -1300,7 +1543,7 @@ Deutsch. Konstruktiv. Max. 220 Wörter.`,
       setFeedback(text);
       const ok = /bestanden/i.test(text) && !/nicht bestanden/i.test(text);
       setPassed(ok);
-      if (ok) onComplete(lesson.id, { completed: true, completedAt: new Date().toISOString(), assessmentPassed: true });
+      if (ok) onComplete(lesson.id, { assessmentPassed: true });
     } catch {
       setFeedback("Verbindungsfehler. Bitte erneut versuchen.");
     }
@@ -1309,38 +1552,33 @@ Deutsch. Konstruktiv. Max. 220 Wörter.`,
 
   const handleReset = () => {
     setFreeText(""); setUploadedFile(null); setUploadedText("");
-    setFeedback(""); setPassed(null);
+    setFeedback(""); setPassed(false);
     if (fileRef.current) fileRef.current.value = "";
   };
 
+  // Already passed — compact success view
+  if (passed && !feedback) return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", gap:12, padding:"4px 0", marginBottom: nextLessonTitle ? 16 : 0 }}>
+        <span style={{ fontSize:18 }}>✅</span>
+        <div>
+          <div style={{ fontWeight:500, fontSize:14, color:T.green }}>Praxisüberprüfung bestanden</div>
+          <div style={{ fontSize:12.5, color:T.text3, marginTop:2 }}>Lektion vollständig abgeschlossen. Ergebnis ist gespeichert.</div>
+        </div>
+      </div>
+      {nextLessonTitle && (
+        <Btn variant="green" size="md" onClick={onNextLesson}>
+          Weiter → {nextLessonTitle.slice(0,30)}{nextLessonTitle.length>30?"…":""}
+        </Btn>
+      )}
+      {!nextLessonTitle && (
+        <Btn variant="ghost" size="sm" onClick={() => setPassed(false)}>Nochmals ansehen</Btn>
+      )}
+    </div>
+  );
+
   return (
     <div>
-      {/* Header */}
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:18 }}>
-        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-          <div style={{ width:34, height:34, borderRadius:9, background:passed===true?T.greenLt:passed===false?T.redLt:T.accentLt, border:`1px solid ${passed===true?T.greenBdr:passed===false?T.redBdr:T.accentBdr}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:15, flexShrink:0 }}>
-            {passed===true?"✓":passed===false?"✗":"🔍"}
-          </div>
-          <div>
-            <div style={{ fontWeight:500, fontSize:14, color:T.text, lineHeight:1.2 }}>Wissensüberprüfung</div>
-            <div style={{ fontSize:11.5, color:T.text3, marginTop:2 }}>Fallstudie · Formular ausfüllen · KI bewertet</div>
-          </div>
-        </div>
-        {passed===true && <Tag variant="green">✓ Bestanden</Tag>}
-        {passed===false && <Tag variant="red">Noch nicht bestanden</Tag>}
-      </div>
-
-      {/* Bereits bestanden — kompakte Anzeige, kein erneutes Formular */}
-      {passed===true && !feedback ? (
-        <div style={{ background:T.greenLt, border:`1px solid ${T.greenBdr}`, borderRadius:T.rSm, padding:"16px 20px", display:"flex", alignItems:"center", gap:12 }}>
-          <span style={{ fontSize:20 }}>✅</span>
-          <div>
-            <div style={{ fontWeight:600, fontSize:14, color:T.green, marginBottom:3 }}>Diese Wissensüberprüfung wurde erfolgreich bestanden.</div>
-            <div style={{ fontSize:13, color:T.text2 }}>Dein Ergebnis ist gespeichert. Du kannst die Lektion jederzeit wiederholen.</div>
-          </div>
-        </div>
-      ) : (<>
-
       {/* Szenario */}
       <div style={{ background:T.bg, borderRadius:T.rSm, padding:"14px 18px", marginBottom:12, border:`1px solid ${T.border}` }}>
         <div style={{ fontSize:10.5, fontWeight:600, color:T.text3, letterSpacing:"0.06em", textTransform:"uppercase", marginBottom:8 }}>Fallbeschreibung</div>
@@ -1353,31 +1591,32 @@ Deutsch. Konstruktiv. Max. 220 Wörter.`,
         <p style={{ fontSize:13.5, color:T.text, lineHeight:1.75 }}>{lc.task}</p>
       </div>
 
-      {/* Formular-Download */}
-      <div style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 16px", background:T.surface, borderRadius:T.rSm, border:`1px solid ${T.border}`, marginBottom:20 }}>
+      {/* Download */}
+      <div style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 16px", background:T.surface, borderRadius:T.rSm, border:`1px solid ${T.border}`, marginBottom:18 }}>
         <span style={{ fontSize:20, flexShrink:0 }}>📄</span>
         <div style={{ flex:1, minWidth:0 }}>
           <div style={{ fontSize:13, fontWeight:500, color:T.text, marginBottom:1 }}>{lc.formLabel}</div>
-          <div style={{ fontSize:11, color:T.text3 }}>Herunterladen → ausfüllen → hier hochladen oder Antwort eintippen</div>
+          <div style={{ fontSize:11, color:T.text3 }}>Herunterladen → ausfüllen → hochladen oder direkt eingeben</div>
         </div>
         <Btn variant="accent" size="sm" style={{ flexShrink:0 }} onClick={() => {
           const a = document.createElement("a"); a.href = `/forms/${lc.formFile}`; a.download = lc.formFile; a.click();
         }}>⬇ Download</Btn>
       </div>
 
-      {/* Eingabe-Bereich — Upload + Textarea immer sichtbar */}
-      {passed !== true && (
-        <div style={{ marginBottom:feedback?16:0 }}>
-          {/* Datei-Upload */}
-          <div onClick={() => fileRef.current?.click()} style={{ border:`2px dashed ${uploadedFile ? T.green : T.border}`, borderRadius:T.rSm, padding:"14px 18px", cursor:"pointer", marginBottom:12, background: uploadedFile ? T.greenLt : "transparent", transition:"border-color 0.15s, background 0.15s", display:"flex", alignItems:"center", gap:12 }}
+      {/* Input — only when not yet passed */}
+      {!passed && (
+        <div>
+          {/* Upload zone */}
+          <div onClick={() => fileRef.current?.click()}
+            style={{ border:`2px dashed ${uploadedFile ? T.green : T.border}`, borderRadius:T.rSm, padding:"14px 18px", cursor:"pointer", marginBottom:12, background:uploadedFile ? T.greenLt : "transparent", transition:"border-color 0.15s, background 0.15s", display:"flex", alignItems:"center", gap:12 }}
             onMouseEnter={e => e.currentTarget.style.borderColor = uploadedFile ? T.green : T.accent}
             onMouseLeave={e => e.currentTarget.style.borderColor = uploadedFile ? T.green : T.border}>
             <input ref={fileRef} type="file" accept=".pdf,.txt,.doc,.docx" style={{ display:"none" }} onChange={handleFile} />
-            <span style={{ fontSize:18, flexShrink:0, opacity: uploadedFile ? 1 : 0.4 }}>📎</span>
+            <span style={{ fontSize:18, flexShrink:0, opacity:uploadedFile?1:0.4 }}>📎</span>
             {uploadedFile ? (
               <div style={{ flex:1 }}>
                 <div style={{ fontSize:13, fontWeight:500, color:T.green }}>{uploadedFile.name}</div>
-                <div style={{ fontSize:11, color:T.text3, marginTop:2 }}>Datei bereit · Klicken zum Ersetzen</div>
+                <div style={{ fontSize:11, color:T.text3, marginTop:2 }}>Klicken zum Ersetzen</div>
               </div>
             ) : (
               <div style={{ flex:1 }}>
@@ -1387,24 +1626,20 @@ Deutsch. Konstruktiv. Max. 220 Wörter.`,
             )}
           </div>
 
-          {/* Divider */}
           <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
             <div style={{ flex:1, height:1, background:T.border }} />
             <span style={{ fontSize:11, color:T.text3, whiteSpace:"nowrap" }}>oder direkt eingeben</span>
             <div style={{ flex:1, height:1, background:T.border }} />
           </div>
 
-          {/* Textarea */}
-          <textarea
-            value={freeText}
-            onChange={e => { setFreeText(e.target.value); if (feedback) { setFeedback(""); setPassed(null); } }}
-            placeholder={`Deine Lösung für den Fall „${lc.scenario.split(".")[0]}"…\n\nGehe auf alle Aufgabenpunkte ein.`}
+          <textarea value={freeText}
+            onChange={e => { setFreeText(e.target.value); if (feedback) { setFeedback(""); } }}
+            placeholder={`Deine Lösung zum Fall…\n\nGehe auf alle Aufgabenpunkte ein.`}
             style={{ width:"100%", minHeight:140, padding:"14px 16px", border:`1.5px solid ${T.border}`, borderRadius:T.rSm, fontSize:13.5, fontFamily:"'DM Sans',sans-serif", lineHeight:1.8, resize:"vertical", color:T.text, background:T.bg, marginBottom:14, transition:"border-color 0.15s" }}
             onFocus={e => e.target.style.borderColor = T.accent}
             onBlur={e => e.target.style.borderColor = T.border}
           />
 
-          {/* Actions */}
           <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
             <Btn variant="accent" size="md" disabled={loading || !hasInput} onClick={handleSubmit}>
               {loading ? "KI bewertet…" : "Zur Bewertung einreichen →"}
@@ -1412,30 +1647,28 @@ Deutsch. Konstruktiv. Max. 220 Wörter.`,
             {(uploadedFile || freeText) && !loading && (
               <Btn variant="ghost" size="sm" onClick={handleReset}>Zurücksetzen</Btn>
             )}
-            {loading && (
-              <span style={{ fontSize:12, color:T.text3, fontStyle:"italic", animation:"pulse 1.5s ease infinite" }}>
-                Wird mit Musterlösung verglichen…
-              </span>
-            )}
+            {loading && <span style={{ fontSize:12, color:T.text3, fontStyle:"italic", animation:"pulse 1.5s ease infinite" }}>Wird mit Musterlösung verglichen…</span>}
           </div>
         </div>
       )}
 
-      {/* KI-Feedback */}
+      {/* Feedback */}
       {feedback && (
-        <div style={{ marginTop:16, borderRadius:T.rSm, border:`1px solid ${passed ? T.greenBdr : T.redBdr}`, background: passed ? T.greenLt : T.redLt, overflow:"hidden" }}>
-          {/* Result-Banner */}
-          <div style={{ padding:"12px 18px", borderBottom:`1px solid ${passed ? T.greenBdr : T.redBdr}`, display:"flex", alignItems:"center", gap:10 }}>
-            <span style={{ fontSize:16 }}>{passed ? "✅" : "📝"}</span>
-            <span style={{ fontWeight:600, fontSize:14, color: passed ? T.green : T.red }}>
-              {passed ? "Bestanden – Lektion abgeschlossen!" : "Noch nicht bestanden – lies das Feedback und versuche es nochmals"}
-            </span>
+        <div style={{ marginTop:16, borderRadius:T.rSm, border:`1px solid ${passed ? T.greenBdr : T.redBdr}`, background:passed ? T.greenLt : T.redLt, overflow:"hidden" }}>
+          <div style={{ padding:"12px 18px", borderBottom:`1px solid ${passed ? T.greenBdr : T.redBdr}`, display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              <span style={{ fontSize:16 }}>{passed ? "✅" : "📝"}</span>
+              <span style={{ fontWeight:600, fontSize:14, color:passed ? T.green : T.red }}>
+                {passed ? "Bestanden – Lektion vollständig abgeschlossen!" : "Noch nicht bestanden"}
+              </span>
+            </div>
+            {passed && nextLessonTitle && (
+              <Btn variant="green" size="sm" onClick={onNextLesson}>
+                Weiter → {nextLessonTitle.slice(0,28)}{nextLessonTitle.length>28?"…":""}
+              </Btn>
+            )}
           </div>
-          {/* Feedback-Text */}
-          <div style={{ padding:"16px 18px", fontSize:13.5, color:T.text, lineHeight:1.85, whiteSpace:"pre-wrap" }}>
-            {feedback}
-          </div>
-          {/* Retry */}
+          <div style={{ padding:"16px 18px", fontSize:13.5, color:T.text, lineHeight:1.85, whiteSpace:"pre-wrap" }}>{feedback}</div>
           {!passed && (
             <div style={{ padding:"12px 18px", borderTop:`1px solid ${T.redBdr}` }}>
               <Btn variant="ghostAccent" size="sm" onClick={handleReset}>↺ Nochmals versuchen</Btn>
@@ -1443,62 +1676,10 @@ Deutsch. Konstruktiv. Max. 220 Wörter.`,
           )}
         </div>
       )}
-      </>)}
     </div>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
-function QuizView({ lesson, onComplete, onBack, onNextLesson, nextLessonTitle }) {
-  const [answers, setAnswers] = useState({}); const [submitted, setSubmitted] = useState(false);
-  const score = submitted?lesson.quiz.filter((q,i)=>answers[i]===q.a).length:0;
-  const pct = submitted?Math.round(score/lesson.quiz.length*100):0;
-  const passed = pct>=67;
-  return (
-    <div style={{ maxWidth:860, margin:"0 44px 44px", padding:"28px 32px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:T.r, boxShadow:T.shadow, fontFamily:"'DM Sans',sans-serif" }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:24, flexWrap:"wrap", gap:12 }}>
-        <div>
-          <h2 style={{ fontFamily:"'Cormorant',serif", fontSize:22, fontWeight:500, color:T.text, marginBottom:4 }}>Quiz: {lesson.title}</h2>
-          <div style={{ fontSize:12.5, color:T.text3 }}>{lesson.quiz.length} Fragen · Mindest-Score 67%</div>
-        </div>
-        {submitted && !passed && <Btn variant="ghostAccent" size="sm" onClick={()=>{ setAnswers({}); setSubmitted(false); }}>↺ Nochmals</Btn>}
-      </div>
-      {lesson.quiz.map((q,qi)=>(
-        <div key={qi} style={{ marginBottom:24 }}>
-          <div style={{ fontWeight:500, fontSize:14, color:T.text, marginBottom:12, lineHeight:1.5 }}><span style={{ color:T.text3, marginRight:8 }}>{qi+1}.</span>{q.q}</div>
-          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-            {q.opts.map((opt,oi)=>{
-              let bg=T.bg,border=T.border,color=T.text2,fw=400;
-              if(submitted){if(oi===q.a){bg=T.greenLt;border=T.green;color=T.green;fw=500;}else if(answers[qi]===oi&&oi!==q.a){bg=T.redLt;border=T.red;color=T.red;}}
-              else if(answers[qi]===oi){bg=T.accentLt;border=T.accent;color=T.accent;fw=500;}
-              return <div key={oi} onClick={()=>!submitted&&setAnswers(a=>({...a,[qi]:oi}))} style={{ padding:"11px 16px", borderRadius:T.rSm, border:`1.5px solid ${border}`, background:bg, cursor:submitted?"default":"pointer", fontSize:13.5, color, fontWeight:fw, transition:"all 0.12s", display:"flex", alignItems:"center", gap:10 }} onMouseEnter={e=>{if(!submitted&&answers[qi]!==oi)e.currentTarget.style.borderColor=T.text3;}} onMouseLeave={e=>{if(!submitted&&answers[qi]!==oi)e.currentTarget.style.borderColor=T.border;}}>
-                <span style={{ fontWeight:600, fontSize:12, width:18, color:color===T.text2?T.text3:color }}>{["A","B","C","D"][oi]}</span>
-                <span style={{ flex:1 }}>{opt}</span>
-                {submitted&&oi===q.a&&<span>✓</span>}
-                {submitted&&answers[qi]===oi&&oi!==q.a&&<span>✗</span>}
-              </div>;
-            })}
-          </div>
-        </div>
-      ))}
-      {!submitted?(
-        <Btn variant="primary" size="md" disabled={Object.keys(answers).length<lesson.quiz.length} onClick={()=>{ setSubmitted(true); onComplete(lesson.id,{quizScore:pct,quizDone:true,completedAt:new Date().toISOString()}); }}>Auswertung abrufen →</Btn>
-      ):(
-        <div style={{ background:passed?T.greenLt:T.redLt, border:`1px solid ${passed?T.greenBdr:T.redBdr}`, borderRadius:T.rSm, padding:"18px 22px", display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:12 }}>
-          <div>
-            <div style={{ fontWeight:600, fontSize:15, color:passed?T.green:T.red, marginBottom:3 }}>{passed?"✓ Bestanden!":"Nicht bestanden"}</div>
-            <div style={{ fontSize:13, color:T.text2 }}>{score}/{lesson.quiz.length} richtig · {pct}%{!passed&&" · Mindest-Score: 67%"}</div>
-          </div>
-          <div style={{ display:"flex", gap:8 }}>
-            {!passed&&<Btn variant="primary" size="sm" onClick={()=>{setAnswers({});setSubmitted(false);}}>↺ Nochmals</Btn>}
-            {passed&&nextLessonTitle&&<Btn variant="green" size="sm" onClick={onNextLesson}>Weiter → {nextLessonTitle.slice(0,28)}{nextLessonTitle.length>28?"…":""}</Btn>}
-            {passed&&!nextLessonTitle&&<Btn variant="green" size="sm" onClick={onBack}>🏆 Zur Kapitelübersicht</Btn>}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ═══════════════════════════════════════════════════════════════════
 // CERTIFIED CHAT — KI-Assistent nach Zertifikat
@@ -1633,26 +1814,30 @@ function ExtrasView({ onBack }) {
 // ═══════════════════════════════════════════════════════════════════
 // ADMIN PANEL — mit Wissensdatenbank
 // ═══════════════════════════════════════════════════════════════════
-function AdminPanel({ allProgress, knowledgeBase, onUpdateKnowledge, onBack }) {
-  const employees = USERS.filter(u=>u.role==="employee");
+function AdminPanel({ allProgress, allProfiles, knowledgeBase, onKbAdd, onKbUpdate, onKbDelete, onCreateUser, onResetPassword, onBack }) {
+  const employees = allProfiles.filter(u => u.role === "employee");
   const [selected, setSelected] = useState(null);
-  const [tab, setTab] = useState("team"); // "team" | "knowledge"
-  const [newTitle, setNewTitle] = useState(""); const [newContent, setNewContent] = useState(""); const [editIdx, setEditIdx] = useState(null);
+  const [tab, setTab] = useState("team");
+  const [newTitle, setNewTitle] = useState(""); const [newContent, setNewContent] = useState(""); const [editId, setEditId] = useState(null);
+  const [newName, setNewName] = useState(""); const [newEmail, setNewEmail] = useState(""); const [newPw, setNewPw] = useState(""); const [newRole, setNewRole] = useState("employee");
+  const [createLoading, setCreateLoading] = useState(false); const [createMsg, setCreateMsg] = useState(null);
+  const [resetMsg, setResetMsg] = useState({});
 
   const fmt = (iso) => { if(!iso)return"–"; return new Date(iso).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit",year:"2-digit",hour:"2-digit",minute:"2-digit"}); };
   const avgScore = (prog) => { const s=Object.values(prog||{}).filter(v=>v.quizScore!==undefined).map(v=>v.quizScore); if(!s.length)return null; return Math.round(s.reduce((a,b)=>a+b,0)/s.length); };
 
+  // Detailansicht eines Mitarbeiters
   if (selected) {
-    const prog = allProgress[selected.id]||{};
+    const prog = allProgress[selected.id] || {};
     const avg = avgScore(prog);
     return (
       <div style={{ padding:"40px 44px", maxWidth:900, fontFamily:"'DM Sans',sans-serif" }} className="fade-up">
-        <button onClick={()=>setSelected(null)} style={{ background:"none", border:"none", color:T.text3, fontSize:13, marginBottom:24, display:"flex", alignItems:"center", gap:6, padding:0, transition:"color 0.15s" }} onMouseEnter={e=>e.currentTarget.style.color=T.text} onMouseLeave={e=>e.currentTarget.style.color=T.text3}>← Teamübersicht</button>
+        <button onClick={()=>setSelected(null)} style={{ background:"none", border:"none", color:T.text3, fontSize:13, marginBottom:24, display:"flex", alignItems:"center", gap:6, padding:0, cursor:"pointer", transition:"color 0.15s" }} onMouseEnter={e=>e.currentTarget.style.color=T.text} onMouseLeave={e=>e.currentTarget.style.color=T.text3}>← Teamübersicht</button>
         <div style={{ display:"flex", alignItems:"center", gap:16, marginBottom:32 }}>
           <Avatar initials={selected.avatar} size={50} bg={T.accent} />
           <div>
             <h1 style={{ fontFamily:"'Cormorant',serif", fontSize:26, fontWeight:400, color:T.text, marginBottom:4 }}>{selected.name}</h1>
-            <div style={{ fontSize:13, color:T.text3 }}>{overallProgress(prog).done}/{overallProgress(prog).total} Lektionen · {overallProgress(prog).pct}%{avg!==null&&<span style={{ marginLeft:10 }}>· Ø Quiz: <strong style={{ color:avg>=67?T.green:T.accent }}>{avg}%</strong></span>}</div>
+            <div style={{ fontSize:13, color:T.text3 }}>{overallProgress(prog).done}/{overallProgress(prog).total} Lektionen · {overallProgress(prog).pct}%{avg!==null&&<span style={{ marginLeft:10 }}>· Ø Quiz: <strong style={{ color:avg>=75?T.green:T.accent }}>{avg}%</strong></span>}</div>
           </div>
         </div>
         {CHAPTERS.map(ch=>{
@@ -1663,7 +1848,7 @@ function AdminPanel({ allProgress, knowledgeBase, onUpdateKnowledge, onBack }) {
                 <div style={{ display:"flex", alignItems:"center", gap:9 }}>
                   <span>{ch.icon}</span>
                   <span style={{ fontWeight:500, fontSize:13.5, color:T.text }}>Kap. {ch.number} · {ch.title}</span>
-                  {cp.pct===100&&<Tag variant="green">✓ Lektionen</Tag>}
+                  {cp.pct===100&&<Tag variant="green">✓ Abgeschlossen</Tag>}
                 </div>
                 <span style={{ fontSize:12, color:T.text3 }}>{cp.done}/{cp.total}</span>
               </div>
@@ -1671,7 +1856,7 @@ function AdminPanel({ allProgress, knowledgeBase, onUpdateKnowledge, onBack }) {
                 <div key={l.id} style={{ padding:"10px 18px", display:"flex", alignItems:"center", gap:12, borderBottom:`1px solid ${T.bg}` }}>
                   <div style={{ width:20, height:20, borderRadius:5, background:ld?T.greenLt:"rgba(0,0,0,0.04)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, color:ld?T.green:T.text3, flexShrink:0, border:`1px solid ${ld?T.greenBdr:T.border}` }}>{ld?"✓":"–"}</div>
                   <span style={{ flex:1, fontSize:13, color:ld?T.text:T.text3 }}>{l.title}</span>
-                  {lp?.quizScore!==undefined&&<span style={{ fontSize:12, fontWeight:500, color:lp.quizScore>=67?T.green:T.red, background:lp.quizScore>=67?T.greenLt:T.redLt, borderRadius:5, padding:"2px 8px" }}>{lp.quizScore}%</span>}
+                  {lp?.quizScore!==undefined&&<span style={{ fontSize:12, fontWeight:500, color:lp.quizScore>=75?T.green:T.red, background:lp.quizScore>=75?T.greenLt:T.redLt, borderRadius:5, padding:"2px 8px" }}>{lp.quizScore}%</span>}
                   <span style={{ fontSize:11, color:T.text3, whiteSpace:"nowrap", minWidth:120, textAlign:"right" }}>{fmt(lp?.completedAt)}</span>
                 </div>
               );})}
@@ -1684,19 +1869,21 @@ function AdminPanel({ allProgress, knowledgeBase, onUpdateKnowledge, onBack }) {
 
   return (
     <div style={{ padding:"40px 44px", maxWidth:960, fontFamily:"'DM Sans',sans-serif" }} className="fade-up">
-      <button onClick={onBack} style={{ background:"none", border:"none", color:T.text3, fontSize:13, marginBottom:24, padding:0, transition:"color 0.15s" }} onMouseEnter={e=>e.currentTarget.style.color=T.text} onMouseLeave={e=>e.currentTarget.style.color=T.text3}>← Zurück</button>
+      <button onClick={onBack} style={{ background:"none", border:"none", color:T.text3, fontSize:13, marginBottom:24, padding:0, cursor:"pointer", transition:"color 0.15s" }} onMouseEnter={e=>e.currentTarget.style.color=T.text} onMouseLeave={e=>e.currentTarget.style.color=T.text3}>← Zurück</button>
       <h1 style={{ fontFamily:"'Cormorant',serif", fontSize:28, fontWeight:400, color:T.text, marginBottom:20, letterSpacing:"-0.02em" }}>Admin-Panel</h1>
 
       {/* Tabs */}
       <div style={{ display:"flex", gap:0, marginBottom:28, background:"rgba(0,0,0,0.05)", borderRadius:T.rSm, padding:4, width:"fit-content" }}>
-        {[["team","👥 Team-Fortschritt"],["knowledge","🧠 Wissensdatenbank"]].map(([id,label])=>(
-          <button key={id} onClick={()=>setTab(id)} style={{ padding:"8px 20px", borderRadius:7, border:"none", fontSize:13, fontWeight:500, background:tab===id?T.surface:"transparent", color:tab===id?T.text:T.text2, boxShadow:tab===id?T.shadow:"none", transition:"all 0.15s" }}>{label}</button>
+        {[["team","👥 Fortschritt"],["users","👤 Mitarbeiter"],["knowledge","🧠 Wissensdatenbank"]].map(([id,label])=>(
+          <button key={id} onClick={()=>setTab(id)} style={{ padding:"8px 18px", borderRadius:7, border:"none", fontSize:13, fontWeight:500, background:tab===id?T.surface:"transparent", color:tab===id?T.text:T.text2, boxShadow:tab===id?T.shadow:"none", transition:"all 0.15s", cursor:"pointer" }}>{label}</button>
         ))}
       </div>
 
+      {/* TAB: Team-Fortschritt */}
       {tab==="team" && (
         <>
-          <p style={{ fontSize:13.5, color:T.text3, marginBottom:20 }}>{employees.length} Mitarbeiterinnen · Klick für Detailansicht</p>
+          <p style={{ fontSize:13.5, color:T.text3, marginBottom:20 }}>{employees.length} Mitarbeiter · Klick für Detailansicht</p>
+          {employees.length === 0 && <p style={{ fontSize:13.5, color:T.text3 }}>Noch keine Mitarbeiter angelegt. Wechsle zum Tab „Mitarbeiter".</p>}
           <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(280px, 1fr))", gap:14 }}>
             {employees.map(emp=>{
               const prog=allProgress[emp.id]||{};
@@ -1707,14 +1894,16 @@ function AdminPanel({ allProgress, knowledgeBase, onUpdateKnowledge, onBack }) {
                     <Avatar initials={emp.avatar} size={40} bg={T.accent} />
                     <div style={{ flex:1 }}>
                       <div style={{ fontWeight:500, fontSize:14, color:T.text, marginBottom:2 }}>{emp.name}</div>
+                      <div style={{ fontSize:12, color:T.text3 }}>{overall.done}/{overall.total} · {overall.pct}%</div>
                     </div>
+                    {overall.pct===100&&<Tag variant="green">✓</Tag>}
                   </div>
                   <ProgressBar pct={overall.pct} height={3} />
                   <div style={{ marginTop:14, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                     <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
                       {CHAPTERS.map(ch=>{ const cp=chapterProgress(prog,ch); return <div key={ch.id} style={{ display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:10, width:14 }}>{ch.icon}</span><div style={{ width:88 }}><ProgressBar pct={cp.pct} height={2.5} /></div><span style={{ fontSize:10, color:T.text3 }}>{cp.pct}%</span></div>;})}
                     </div>
-                    {avg!==null?<div style={{ textAlign:"center" }}><div style={{ fontFamily:"'Cormorant',serif", fontSize:24, fontWeight:500, color:avg>=67?T.green:T.accent, lineHeight:1 }}>{avg}%</div><div style={{ fontSize:10, color:T.text3, marginTop:2 }}>Ø Quiz</div></div>:null}
+                    {avg!==null?<div style={{ textAlign:"center" }}><div style={{ fontFamily:"'Cormorant',serif", fontSize:24, fontWeight:500, color:avg>=75?T.green:T.accent, lineHeight:1 }}>{avg}%</div><div style={{ fontSize:10, color:T.text3, marginTop:2 }}>Ø Quiz</div></div>:null}
                   </div>
                 </div>
               );
@@ -1723,24 +1912,94 @@ function AdminPanel({ allProgress, knowledgeBase, onUpdateKnowledge, onBack }) {
         </>
       )}
 
+      {/* TAB: Mitarbeiter verwalten */}
+      {tab==="users" && (
+        <div style={{ maxWidth:720 }}>
+          {/* Nutzerliste */}
+          {allProfiles.length > 0 && (
+            <div style={{ marginBottom:32 }}>
+              <div style={{ fontSize:12, fontWeight:500, color:T.text3, letterSpacing:"0.04em", textTransform:"uppercase", marginBottom:14 }}>Alle Nutzer ({allProfiles.length})</div>
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                {allProfiles.map(p => (
+                  <div key={p.id} style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:T.r, padding:"16px 20px", display:"flex", alignItems:"center", gap:14, boxShadow:T.shadow }}>
+                    <Avatar initials={p.avatar} size={38} bg={p.role==="admin"?T.rail:T.accent} />
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight:500, fontSize:14, color:T.text }}>{p.name}</div>
+                      <div style={{ fontSize:12, color:T.text3, marginTop:2 }}>{p.email || "—"} · <Tag variant={p.role==="admin"?"default":"accent"}>{p.role==="admin"?"Admin":"Mitarbeiter"}</Tag></div>
+                    </div>
+                    <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                      {resetMsg[p.id] && <span style={{ fontSize:12, color:T.green }}>{resetMsg[p.id]}</span>}
+                      <button onClick={async()=>{
+                        const r = await onResetPassword(p.id);
+                        setResetMsg(prev => ({ ...prev, [p.id]: r.error ? "Fehler" : "Link gesendet ✓" }));
+                        setTimeout(() => setResetMsg(prev => ({ ...prev, [p.id]: null })), 4000);
+                      }} style={{ background:"none", border:`1px solid ${T.border}`, borderRadius:T.rXs, padding:"5px 12px", fontSize:12, color:T.text2, cursor:"pointer" }}>
+                        Reset-Link senden
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Neuen Mitarbeiter anlegen */}
+          <div style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:T.r, padding:"24px 28px", boxShadow:T.shadow }}>
+            <div style={{ fontWeight:500, fontSize:14, color:T.text, marginBottom:4 }}>Neuen Mitarbeiter anlegen</div>
+            <p style={{ fontSize:12.5, color:T.text3, marginBottom:20, lineHeight:1.65 }}>
+              Der Mitarbeiter erhält eine E-Mail-Einladung und kann sich direkt einloggen.
+            </p>
+            {[["Vollständiger Name","text",newName,setNewName,"Maria Müller"],["E-Mail-Adresse","email",newEmail,setNewEmail,"m.mueller@beratung.de"],["Temporäres Passwort","password",newPw,setNewPw,"Sicher2025!"]].map(([label,type,val,setter,ph])=>(
+              <div key={label} style={{ marginBottom:14 }}>
+                <label style={{ display:"block", fontSize:12, fontWeight:500, color:T.text2, marginBottom:6 }}>{label}</label>
+                <input type={type} value={val} onChange={e=>setter(e.target.value)} placeholder={ph} style={{ width:"100%", padding:"10px 14px", border:`1.5px solid ${T.border}`, borderRadius:T.rSm, fontSize:14, color:T.text, background:T.bg, fontFamily:"inherit" }} onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border} />
+              </div>
+            ))}
+            <div style={{ marginBottom:20 }}>
+              <label style={{ display:"block", fontSize:12, fontWeight:500, color:T.text2, marginBottom:8 }}>Rolle</label>
+              <div style={{ display:"flex", gap:10 }}>
+                {[["employee","Mitarbeiter"],["admin","Admin"]].map(([val,label])=>(
+                  <div key={val} onClick={()=>setNewRole(val)} style={{ flex:1, padding:"10px 14px", border:`1.5px solid ${newRole===val?T.accent:T.border}`, borderRadius:T.rSm, cursor:"pointer", background:newRole===val?T.accentLt:"transparent", textAlign:"center", fontSize:13.5, color:newRole===val?T.accent:T.text2, fontWeight:newRole===val?500:400, transition:"all 0.15s" }}>
+                    {label}
+                  </div>
+                ))}
+              </div>
+            </div>
+            {createMsg && (
+              <div style={{ background:createMsg.error?T.redLt:T.greenLt, border:`1px solid ${createMsg.error?T.redBdr:T.greenBdr}`, borderRadius:T.rXs, padding:"10px 14px", fontSize:13, color:createMsg.error?T.red:T.green, marginBottom:16 }}>
+                {createMsg.error || createMsg.success}
+              </div>
+            )}
+            <Btn variant="primary" disabled={createLoading||!newName.trim()||!newEmail.trim()||!newPw.trim()} onClick={async()=>{
+              setCreateLoading(true); setCreateMsg(null);
+              const r = await onCreateUser(newName.trim(), newEmail.trim(), newPw, newRole);
+              setCreateLoading(false);
+              if (r.error) { setCreateMsg({ error: r.error }); }
+              else { setCreateMsg({ success: `✓ ${newName} wurde erfolgreich angelegt.` }); setNewName(""); setNewEmail(""); setNewPw(""); setNewRole("employee"); }
+            }}>
+              {createLoading ? "Wird angelegt…" : "Mitarbeiter anlegen"}
+            </Btn>
+          </div>
+        </div>
+      )}
+
+      {/* TAB: Wissensdatenbank */}
       {tab==="knowledge" && (
         <div style={{ maxWidth:720 }}>
           <p style={{ fontSize:13.5, color:T.text2, lineHeight:1.7, marginBottom:24 }}>
-            Hier pflegst du aktuelles Wissen, das direkt in die freigeschaltete Elterngeld-KI einfließt. Neue Rechtsänderungen, Bundesland-spezifische Regelungen oder interne Hinweise – alles was du hier einträgst, nutzt die KI ab sofort in Beratungsantworten.
+            Wissen das direkt in die Elterngeld-KI einfließt. Neue Rechtsänderungen, Bundesland-spezifische Regelungen oder interne Hinweise.
           </p>
-
-          {/* Bestehende Einträge */}
           {knowledgeBase.length > 0 && (
             <div style={{ marginBottom:28 }}>
               <div style={{ fontSize:12, fontWeight:500, color:T.text3, letterSpacing:"0.04em", textTransform:"uppercase", marginBottom:14 }}>Aktuelle Einträge ({knowledgeBase.length})</div>
               <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                {knowledgeBase.map((entry, i)=>(
-                  <div key={i} style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:T.r, padding:"18px 22px", boxShadow:T.shadow }}>
+                {knowledgeBase.map((entry)=>(
+                  <div key={entry.id} style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:T.r, padding:"18px 22px", boxShadow:T.shadow }}>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
                       <div style={{ fontWeight:500, fontSize:14, color:T.text }}>{entry.title}</div>
                       <div style={{ display:"flex", gap:8, flexShrink:0, marginLeft:12 }}>
-                        <button onClick={()=>{ setNewTitle(entry.title); setNewContent(entry.content); setEditIdx(i); }} style={{ background:"none", border:"none", fontSize:12, color:T.text3, cursor:"pointer", padding:"2px 6px" }}>Bearbeiten</button>
-                        <button onClick={()=>{ const updated=[...knowledgeBase]; updated.splice(i,1); onUpdateKnowledge(updated); }} style={{ background:"none", border:"none", fontSize:12, color:T.red, cursor:"pointer", padding:"2px 6px" }}>Löschen</button>
+                        <button onClick={()=>{ setNewTitle(entry.title); setNewContent(entry.content); setEditId(entry.id); }} style={{ background:"none", border:"none", fontSize:12, color:T.text3, cursor:"pointer", padding:"2px 6px" }}>Bearbeiten</button>
+                        <button onClick={()=>onKbDelete(entry.id)} style={{ background:"none", border:"none", fontSize:12, color:T.red, cursor:"pointer", padding:"2px 6px" }}>Löschen</button>
                       </div>
                     </div>
                     <p style={{ fontSize:13, color:T.text2, lineHeight:1.7, whiteSpace:"pre-wrap" }}>{entry.content}</p>
@@ -1750,26 +2009,24 @@ function AdminPanel({ allProgress, knowledgeBase, onUpdateKnowledge, onBack }) {
               </div>
             </div>
           )}
-
-          {/* Neuer Eintrag */}
           <div style={{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:T.r, padding:"24px 28px", boxShadow:T.shadow }}>
-            <div style={{ fontWeight:500, fontSize:14, color:T.text, marginBottom:16 }}>{editIdx!==null?"Eintrag bearbeiten":"Neues Wissen hinzufügen"}</div>
+            <div style={{ fontWeight:500, fontSize:14, color:T.text, marginBottom:16 }}>{editId?"Eintrag bearbeiten":"Neues Wissen hinzufügen"}</div>
             <div style={{ marginBottom:14 }}>
               <label style={{ display:"block", fontSize:12, fontWeight:500, color:T.text2, marginBottom:6 }}>Titel / Thema</label>
-              <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="z.B. Neue Regelung Bayern 2025, Grenzgänger Schweiz, §2a BEEG Änderung…" style={{ width:"100%", padding:"10px 14px", border:`1.5px solid ${T.border}`, borderRadius:T.rSm, fontSize:14, color:T.text, background:T.bg }} onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border} />
+              <input value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="z.B. Neue Regelung Bayern 2025…" style={{ width:"100%", padding:"10px 14px", border:`1.5px solid ${T.border}`, borderRadius:T.rSm, fontSize:14, color:T.text, background:T.bg, fontFamily:"inherit" }} onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border} />
             </div>
             <div style={{ marginBottom:18 }}>
               <label style={{ display:"block", fontSize:12, fontWeight:500, color:T.text2, marginBottom:6 }}>Inhalt</label>
-              <textarea value={newContent} onChange={e=>setNewContent(e.target.value)} placeholder="Beschreibe die Regelung, Änderung oder Information so, wie sie in der Beratung relevant ist. Die KI nutzt diesen Text direkt als Wissensbasis." style={{ width:"100%", minHeight:120, padding:"12px 14px", border:`1.5px solid ${T.border}`, borderRadius:T.rSm, fontSize:13.5, fontFamily:"'DM Sans',sans-serif", lineHeight:1.75, resize:"vertical", color:T.text, background:T.bg }} onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border} />
+              <textarea value={newContent} onChange={e=>setNewContent(e.target.value)} placeholder="Beschreibe die Regelung oder Information…" style={{ width:"100%", minHeight:120, padding:"12px 14px", border:`1.5px solid ${T.border}`, borderRadius:T.rSm, fontSize:13.5, fontFamily:"'DM Sans',sans-serif", lineHeight:1.75, resize:"vertical", color:T.text, background:T.bg }} onFocus={e=>e.target.style.borderColor=T.accent} onBlur={e=>e.target.style.borderColor=T.border} />
             </div>
             <div style={{ display:"flex", gap:10 }}>
-              <Btn variant="primary" disabled={!newTitle.trim()||!newContent.trim()} onClick={()=>{
-                const entry = { title:newTitle.trim(), content:newContent.trim(), createdAt:new Date().toISOString() };
-                let updated;
-                if (editIdx!==null) { updated=[...knowledgeBase]; updated[editIdx]=entry; setEditIdx(null); } else { updated=[...knowledgeBase, entry]; }
-                onUpdateKnowledge(updated); setNewTitle(""); setNewContent("");
-              }}>{editIdx!==null?"Aktualisieren":"Eintrag speichern"}</Btn>
-              {editIdx!==null && <Btn variant="ghost" onClick={()=>{ setEditIdx(null); setNewTitle(""); setNewContent(""); }}>Abbrechen</Btn>}
+              <Btn variant="primary" disabled={!newTitle.trim()||!newContent.trim()} onClick={async()=>{
+                const entry = { title:newTitle.trim(), content:newContent.trim() };
+                if (editId) { await onKbUpdate(editId, entry); setEditId(null); }
+                else { await onKbAdd(entry); }
+                setNewTitle(""); setNewContent("");
+              }}>{editId?"Aktualisieren":"Eintrag speichern"}</Btn>
+              {editId && <Btn variant="ghost" onClick={()=>{ setEditId(null); setNewTitle(""); setNewContent(""); }}>Abbrechen</Btn>}
             </div>
           </div>
         </div>
@@ -1777,6 +2034,7 @@ function AdminPanel({ allProgress, knowledgeBase, onUpdateKnowledge, onBack }) {
     </div>
   );
 }
+
 
 // ═══════════════════════════════════════════════════════════════════
 // CERTIFICATE
@@ -1815,40 +2073,195 @@ function CertificateView({ user, onClose }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// APP ROOT
+// APP ROOT — Supabase Auth + Data Layer
 // ═══════════════════════════════════════════════════════════════════
 export default function App() {
   injectFonts();
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(null);         // profile from DB
+  const [appLoading, setAppLoading] = useState(true);
   const [view, setView] = useState("dashboard");
   const [activeChapter, setActiveChapter] = useState(null);
   const [activeLesson, setActiveLesson] = useState(null);
   const [activeLessonChapter, setActiveLessonChapter] = useState(null);
-  const [showQuiz, setShowQuiz] = useState(false);
   const [showCert, setShowCert] = useState(false);
+  const [allProgress, setAllProgress] = useState({});
+  const [allProfiles, setAllProfiles] = useState([]);
+  const [knowledgeBase, setKnowledgeBase] = useState([]);
 
-  const [allProgress, setAllProgress] = useState(()=>{ try{const s=localStorage.getItem("elterngeld_progress_v1");return s?JSON.parse(s):{}}catch{return{}}; });
-  const [knowledgeBase, setKnowledgeBase] = useState(()=>{ try{const s=localStorage.getItem("elterngeld_knowledge_v1");return s?JSON.parse(s):[]}catch{return[]}; });
+  // ─── Auth listener ──────────────────────────────────────────────
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) loadUserData(session.user.id);
+      else setAppLoading(false);
+    });
 
-  useEffect(()=>{ try{localStorage.setItem("elterngeld_progress_v1",JSON.stringify(allProgress));}catch{} }, [allProgress]);
-  useEffect(()=>{ try{localStorage.setItem("elterngeld_knowledge_v1",JSON.stringify(knowledgeBase));}catch{} }, [knowledgeBase]);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT' || !session) {
+        setUser(null); setAllProgress({}); setAllProfiles([]); setKnowledgeBase([]);
+        setView("dashboard"); setAppLoading(false);
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
-  const getProgress = () => user?(allProgress[user.id]||{}):{};
-  const setProgress = (lessonId, data) => setAllProgress(prev=>({
-    ...prev,
-    [user.id]: { ...(prev[user.id]||{}), [lessonId]: { ...(prev[user.id]?.[lessonId]||{}), ...data, completed:true, completedAt:prev[user.id]?.[lessonId]?.completedAt||new Date().toISOString() } }
-  }));
+  // ─── Load current user data ─────────────────────────────────────
+  const loadUserData = async (userId) => {
+    try {
+      const { data: profile, error } = await supabase
+        .from('profiles').select('*').eq('id', userId).single();
+      if (error) throw error;
+      setUser(profile);
+
+      // Progress
+      const { data: progressRows } = await supabase
+        .from('progress').select('*').eq('user_id', userId);
+      const progMap = {};
+      (progressRows || []).forEach(r => {
+        progMap[r.lesson_id] = {
+          quizScore: r.quiz_score,
+          assessmentPassed: r.assessment_passed,
+          completed: r.completed,
+          completedAt: r.completed_at,
+        };
+      });
+      setAllProgress(prev => ({ ...prev, [userId]: progMap }));
+
+      // Knowledge base
+      const { data: kbRows } = await supabase
+        .from('knowledge_base').select('*').order('created_at', { ascending: false });
+      setKnowledgeBase((kbRows || []).map(k => ({
+        id: k.id, title: k.title, content: k.content, createdAt: k.created_at
+      })));
+
+      // Admin: load all users + all progress
+      if (profile.role === 'admin') await loadAdminData();
+    } catch (err) {
+      console.error('loadUserData error:', err);
+    }
+    setAppLoading(false);
+  };
+
+  // ─── Load all data for admin view ───────────────────────────────
+  const loadAdminData = async () => {
+    const [{ data: profiles }, { data: allProg }] = await Promise.all([
+      supabase.from('profiles').select('*').order('name'),
+      supabase.from('progress').select('*')
+    ]);
+    setAllProfiles(profiles || []);
+    const progressMap = {};
+    (allProg || []).forEach(r => {
+      if (!progressMap[r.user_id]) progressMap[r.user_id] = {};
+      progressMap[r.user_id][r.lesson_id] = {
+        quizScore: r.quiz_score,
+        assessmentPassed: r.assessment_passed,
+        completed: r.completed,
+        completedAt: r.completed_at,
+      };
+    });
+    setAllProgress(prev => ({ ...prev, ...progressMap }));
+  };
+
+  // ─── Progress setzen + in Supabase speichern ────────────────────
+  const setProgress = (lessonId, data) => {
+    if (!user) return;
+    const userId = user.id;
+    const userProg = allProgress[userId] || {};
+    const existing = userProg[lessonId] || {};
+    const merged = { ...existing, ...data };
+    const quizOk = merged.quizScore !== undefined && merged.quizScore >= QUIZ_PASS;
+    const hasAssessment = !!LESSON_CASES[lessonId];
+    const assessOk = hasAssessment ? !!merged.assessmentPassed : true;
+    if (quizOk && assessOk && !merged.completedAt) merged.completedAt = new Date().toISOString();
+    merged.completed = quizOk && assessOk;
+
+    // Optimistic update
+    setAllProgress(prev => ({ ...prev, [userId]: { ...userProg, [lessonId]: merged } }));
+
+    // Supabase upsert (fire and forget)
+    supabase.from('progress').upsert({
+      user_id: userId,
+      lesson_id: lessonId,
+      quiz_score: merged.quizScore ?? null,
+      assessment_passed: !!merged.assessmentPassed,
+      completed: merged.completed,
+      completed_at: merged.completedAt || null,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'user_id,lesson_id' }).then(({ error }) => {
+      if (error) console.error('Progress save error:', error);
+    });
+  };
+
+  // ─── Knowledge base CRUD ────────────────────────────────────────
+  const onKbAdd = async (entry) => {
+    const { data, error } = await supabase.from('knowledge_base')
+      .insert({ title: entry.title, content: entry.content }).select().single();
+    if (!error && data) setKnowledgeBase(prev => [{ id:data.id, title:data.title, content:data.content, createdAt:data.created_at }, ...prev]);
+  };
+
+  const onKbUpdate = async (id, entry) => {
+    const { error } = await supabase.from('knowledge_base')
+      .update({ title: entry.title, content: entry.content, updated_at: new Date().toISOString() })
+      .eq('id', id);
+    if (!error) setKnowledgeBase(prev => prev.map(k => k.id === id ? { ...k, ...entry } : k));
+  };
+
+  const onKbDelete = async (id) => {
+    const { error } = await supabase.from('knowledge_base').delete().eq('id', id);
+    if (!error) setKnowledgeBase(prev => prev.filter(k => k.id !== id));
+  };
+
+  // ─── User management (Admin) ────────────────────────────────────
+  const onCreateUser = async (name, email, password, role) => {
+    const { data, error } = await supabase.auth.signUp({
+      email, password,
+      options: { data: { name, avatar: name.split(' ').map(n=>n[0]).join('').toUpperCase().slice(0,2), role } }
+    });
+    if (error) return { error: error.message };
+    // Ensure profile exists (trigger usually handles this)
+    if (data.user) {
+      await supabase.from('profiles').upsert({
+        id: data.user.id, name,
+        avatar: name.split(' ').map(n=>n[0]).join('').toUpperCase().slice(0,2),
+        role
+      });
+      await loadAdminData();
+    }
+    return { success: true };
+  };
+
+  const onResetPassword = async (userId) => {
+    const profile = allProfiles.find(p => p.id === userId);
+    if (!profile) return { error: 'Nutzer nicht gefunden' };
+    if (!profile.email) return { error: 'Keine E-Mail-Adresse hinterlegt' };
+    const { error } = await supabase.auth.resetPasswordForEmail(profile.email, {
+      redirectTo: window.location.href
+    });
+    if (error) return { error: error.message };
+    return { success: true };
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setUser(null); setAllProgress({}); setAllProfiles([]); setKnowledgeBase([]);
+    setView("dashboard");
+  };
+
+  // ─── Navigation ─────────────────────────────────────────────────
+  const getProgress = () => user ? (allProgress[user.id] || {}) : {};
 
   const handleNextLesson = (currentLessonId) => {
     const next = getNextLesson(currentLessonId);
     if (!next) { setView("dashboard"); return; }
     const nextChapter = CHAPTERS.find(c=>c.id===next.chapterId);
     const nextLesson = nextChapter?.lessons.find(l=>l.id===next.id);
-    if (nextChapter && nextLesson) { setActiveChapter(nextChapter); setActiveLesson(nextLesson); setActiveLessonChapter(nextChapter); setShowQuiz(false); setView("lesson"); window.scrollTo({top:0,behavior:"smooth"}); }
+    if (nextChapter && nextLesson) {
+      setActiveChapter(nextChapter); setActiveLesson(nextLesson);
+      setActiveLessonChapter(nextChapter); setView("lesson");
+      window.scrollTo({top:0,behavior:"smooth"});
+    }
   };
 
   const handleNavigate = (id) => {
-    setShowQuiz(false);
     if (id==="dashboard") { setView("dashboard"); setActiveChapter(null); setActiveLesson(null); }
     else if (id==="extras") setView("extras");
     else if (id==="admin") setView("admin");
@@ -1861,42 +2274,52 @@ export default function App() {
     }
   };
 
-  if (!user) return <LoginScreen onLogin={(u)=>{ setUser(u); setView("dashboard"); }} />;
+  // ─── Loading screen ─────────────────────────────────────────────
+  if (appLoading) return (
+    <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'DM Sans',sans-serif" }}>
+      <div style={{ textAlign:"center" }}>
+        <div style={{ width:48, height:48, borderRadius:14, background:T.rail, display:"flex", alignItems:"center", justifyContent:"center", fontSize:22, margin:"0 auto 16px" }}>📎</div>
+        <div style={{ fontFamily:"'Cormorant',serif", fontSize:20, color:T.text, marginBottom:8 }}>Elterngeld-Training</div>
+        <div style={{ fontSize:13, color:T.text3 }}>Wird geladen…</div>
+      </div>
+    </div>
+  );
+
+  if (!user) return <LoginScreen onLogin={(authUser) => loadUserData(authUser.id)} />;
 
   const prog = getProgress();
   const certUnlocked = allDone(prog);
-  const nextLessonInfo = activeLesson?getNextLesson(activeLesson.id):null;
-  const nextLessonTitle = nextLessonInfo?CHAPTERS.flatMap(c=>c.lessons).find(l=>l.id===nextLessonInfo.id)?.title:null;
+  const nextLessonInfo = activeLesson ? getNextLesson(activeLesson.id) : null;
+  const nextLessonTitle = nextLessonInfo ? CHAPTERS.flatMap(c=>c.lessons).find(l=>l.id===nextLessonInfo.id)?.title : null;
 
   return (
     <div style={{ fontFamily:"'DM Sans',sans-serif", background:T.bg, display:"flex", minHeight:"100vh", color:T.text }}>
       <Sidebar user={user} prog={prog} view={view} onNavigate={handleNavigate} certUnlocked={certUnlocked}
-        onLogout={()=>{ setUser(null); setView("dashboard"); setShowQuiz(false); }} />
+        onLogout={handleLogout} />
       <main style={{ flex:1, overflowY:"auto", minHeight:"100vh" }}>
         {view==="dashboard" && <Dashboard user={user} prog={prog} onSelectChapter={ch=>{setActiveChapter(ch);setView("chapter");}} onExtras={()=>setView("extras")} onCertificate={()=>setShowCert(true)} onCertifiedChat={()=>setView("certified-chat")} />}
 
-        {view==="chapter" && activeChapter && <ChapterView chapter={activeChapter} prog={prog}
-          onSelectLesson={(l,ch)=>{ setActiveLesson(l); setActiveLessonChapter(ch); setShowQuiz(false); setView("lesson"); }}
+        {view==="chapter" && activeChapter && <ChapterView chapter={activeChapter} prog={prog} isAdmin={user.role==="admin"}
+          onSelectLesson={(l,ch)=>{ setActiveLesson(l); setActiveLessonChapter(ch); setView("lesson"); }}
           onBack={()=>setView("dashboard")} />}
 
         {view==="lesson" && activeLesson && activeLessonChapter && (
-          <div>
-            <LessonView lesson={activeLesson} chapter={activeLessonChapter} prog={prog} onComplete={(lid,data)=>setProgress(lid,data)} onBack={()=>setView("chapter")} />
-            <div style={{ maxWidth:860, margin:"0 44px 44px", padding:"22px 28px", background:T.surface, border:`1px solid ${T.border}`, borderRadius:T.r, textAlign:"center", boxShadow:T.shadow, fontFamily:"'DM Sans',sans-serif" }}>
-              {!showQuiz?(<>
-                <p style={{ color:T.text3, fontSize:13.5, marginBottom:14 }}>Bereit für die Wissensfragen zu dieser Lektion?</p>
-                <Btn variant="primary" onClick={()=>setShowQuiz(true)}>Quiz starten ({activeLesson.quiz.length} Fragen) →</Btn>
-              </>):(
-                <QuizView key={`quiz-${activeLesson.id}`} lesson={activeLesson} onComplete={(lid,data)=>setProgress(lid,data)} onBack={()=>setShowQuiz(false)} onNextLesson={()=>handleNextLesson(activeLesson.id)} nextLessonTitle={nextLessonTitle} />
-              )}
-            </div>
-          </div>
+          <LessonView
+            lesson={activeLesson} chapter={activeLessonChapter} prog={prog} isAdmin={user.role==="admin"}
+            onComplete={(lid,data)=>setProgress(lid,data)} onBack={()=>setView("chapter")}
+            onNextLesson={()=>handleNextLesson(activeLesson.id)} nextLessonTitle={nextLessonTitle} />
         )}
-
 
         {view==="extras" && <ExtrasView onBack={()=>setView("dashboard")} />}
         {view==="certified-chat" && certUnlocked && <CertifiedChat user={user} knowledgeBase={knowledgeBase} />}
-        {view==="admin" && user.role==="admin" && <AdminPanel allProgress={allProgress} knowledgeBase={knowledgeBase} onUpdateKnowledge={setKnowledgeBase} onBack={()=>setView("dashboard")} />}
+        {view==="admin" && user.role==="admin" && (
+          <AdminPanel
+            allProgress={allProgress} allProfiles={allProfiles}
+            knowledgeBase={knowledgeBase}
+            onKbAdd={onKbAdd} onKbUpdate={onKbUpdate} onKbDelete={onKbDelete}
+            onCreateUser={onCreateUser} onResetPassword={onResetPassword}
+            onBack={()=>setView("dashboard")} />
+        )}
       </main>
       {showCert && <CertificateView user={user} onClose={()=>setShowCert(false)} />}
     </div>
